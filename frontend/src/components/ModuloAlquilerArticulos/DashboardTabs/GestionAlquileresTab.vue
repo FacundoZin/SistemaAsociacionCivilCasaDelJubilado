@@ -2,6 +2,7 @@
 import { ref, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AlquilerService from '../../../services/AlquilerService'
+import SociosService from '../../../services/SociosService'
 import AlquilerCard from '../Alquileres/AlquilerCard.vue'
 import Pagination from '../../Common/Pagination.vue'
 
@@ -11,10 +12,13 @@ const emit = defineEmits(['show-toast', 'view-detail'])
 // State
 const alquileres = ref([])
 const loadingAlquileres = ref(false)
-const searchDni = ref('')
+const searchQuery = ref('')
+const searchDni = searchQuery // compat alias
 const searchResultAlquileres = ref([])
 const isSearching = ref(false)
 const searchError = ref('')
+const sociosMatches = ref([])
+const showSocioSelector = ref(false)
 
 // Pagination
 const currentPage = ref(1)
@@ -27,7 +31,9 @@ const loadAlquileresActivos = async () => {
   loadingAlquileres.value = true
   searchResultAlquileres.value = [] // Reset search
   isSearching.value = false
-  searchDni.value = ''
+  searchQuery.value = ''
+  sociosMatches.value = []
+  showSocioSelector.value = false
   try {
     const result = await AlquilerService.getAllActive(currentPage.value, pageSize.value)
     alquileres.value = result.items
@@ -48,19 +54,75 @@ const handlePageChange = (newPage) => {
   loadAlquileresActivos()
 }
 
-const handleSearch = async () => {
-  const dniClean = searchDni.value.replace(/\s/g, '').trim()
-  if (!dniClean) {
-    loadAlquileresActivos()
-    return
-  }
-
+const fetchAlquileresByDni = async (dni) => {
   loadingAlquileres.value = true
   isSearching.value = true
   searchError.value = ''
   try {
-    const result = await AlquilerService.getBySocio(dniClean)
+    const result = await AlquilerService.getBySocio(dni)
     searchResultAlquileres.value = result
+    if (result.length === 0) searchError.value = 'No se encontraron alquileres para el socio seleccionado'
+  } catch (e) {
+    searchError.value = e.message
+    searchResultAlquileres.value = []
+  } finally {
+    loadingAlquileres.value = false
+  }
+}
+
+const selectSocioForAlquileres = (socio) => {
+  showSocioSelector.value = false
+  sociosMatches.value = []
+  searchQuery.value = socio.dni
+  fetchAlquileresByDni(socio.dni)
+}
+
+const handleSearch = async () => {
+  const queryClean = searchQuery.value.replace(/\s+/g, ' ').trim()
+  if (!queryClean) {
+    loadAlquileresActivos()
+    return
+  }
+
+  // Heuristic: if query looks like DNI (only digits), try direct alquiler fetch first
+  const isDniLike = /^\d+$/.test(queryClean.replace(/\s/g, ''))
+
+  loadingAlquileres.value = true
+  isSearching.value = true
+  searchError.value = ''
+  sociosMatches.value = []
+  showSocioSelector.value = false
+  try {
+    if (isDniLike) {
+      try {
+        const result = await AlquilerService.getBySocio(queryClean)
+        if (result.length > 0) {
+          searchResultAlquileres.value = result
+          return
+        }
+        // If no alquileres but DNI valid, fall through to socio search to verify existence
+      } catch (e) {
+        // fall through to socio search
+      }
+    }
+
+    // Search socios by query (DNI, nombre, apellido)
+    const sociosData = await SociosService.search(queryClean, 1, 20)
+    let items = []
+    if (Array.isArray(sociosData)) items = sociosData
+    else if (sociosData && Array.isArray(sociosData.items)) items = sociosData.items
+    else if (sociosData && sociosData.id) items = [sociosData]
+
+    if (items.length === 0) {
+      searchError.value = 'No se encontraron socios con ese criterio'
+      searchResultAlquileres.value = []
+    } else if (items.length === 1) {
+      await fetchAlquileresByDni(items[0].dni)
+    } else {
+      sociosMatches.value = items
+      showSocioSelector.value = true
+      searchResultAlquileres.value = []
+    }
   } catch (e) {
     searchError.value = e.message
     searchResultAlquileres.value = []
@@ -76,7 +138,7 @@ const goToAlquilerDetail = (id) => {
 }
 
 // Watchers
-watch(searchDni, () => {
+watch(searchQuery, () => {
   searchError.value = ''
 })
 
@@ -93,7 +155,7 @@ onMounted(() => {
     >
       <div class="w-full sm:w-auto flex-1 max-w-lg">
         <label
-          for="search-dni"
+          for="search-query"
           class="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2"
           >Buscar alquiler por socio</label
         >
@@ -115,14 +177,14 @@ onMounted(() => {
           </div>
           <input
             type="text"
-            id="search-dni"
-            v-model="searchDni"
+            id="search-query"
+            v-model="searchQuery"
             @keyup.enter="handleSearch"
             class="block w-full rounded-xl border-slate-300 pl-11 pr-10 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 sm:text-sm px-3 py-3 border transition-all"
-            placeholder="Ingrese el DNI del socio..."
+            placeholder="Ingrese DNI, nombre o apellido..."
           />
           <button
-            v-if="searchDni"
+            v-if="searchQuery"
             @click="loadAlquileresActivos()"
             class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-red-500 transition-colors"
           >
@@ -141,6 +203,22 @@ onMounted(() => {
               />
             </svg>
           </button>
+        </div>
+        <!-- Socio selector when multiple matches -->
+        <div v-if="showSocioSelector && sociosMatches.length > 0" class="mt-3">
+          <p class="text-xs text-slate-500 mb-2 font-medium">Se encontraron {{ sociosMatches.length }} socios — seleccione uno:</p>
+          <div class="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+            <button v-for="s in sociosMatches" :key="s.id" @click="selectSocioForAlquileres(s)"
+              class="w-full text-left p-3 bg-white border border-slate-200 rounded-xl hover:bg-indigo-50 hover:border-indigo-200 transition-all flex justify-between items-center group">
+              <div>
+                <p class="text-sm font-bold text-slate-900 group-hover:text-indigo-700">{{ s.apellido }}, {{ s.nombre }}</p>
+                <p class="text-xs text-slate-500">DNI: {{ s.dni }}</p>
+              </div>
+              <svg class="w-4 h-4 text-slate-300 group-hover:text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
       <button

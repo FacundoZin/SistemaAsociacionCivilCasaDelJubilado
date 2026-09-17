@@ -14,6 +14,7 @@ namespace APIClub.Domain.GestionSocios
         Task<Result<object>> ReactivarSocio(int id);
         Task<Result<PreviewSocioDto>> GetSocioById(int id);
         Task<Result<FullSocioDto>> GetFullSocioById(int id);
+        Task<Result<PagedResult<PreviewSocioDto>>> SearchSociosAsync(string query, int page, int pageSize);
 
     }
 }

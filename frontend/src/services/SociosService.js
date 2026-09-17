@@ -48,6 +48,20 @@ export default {
     return await response.json()
   },
 
+  async search(query, page = 1, pageSize = 10) {
+    const clean = String(query ?? '').replace(/\s+/g, ' ').trim()
+    if (!clean) throw new Error('Debe indicar un término de búsqueda')
+    const params = new URLSearchParams({ q: clean, page: String(page), pageSize: String(pageSize) })
+    const response = await fetch(`${API_URL}/search?${params.toString()}`, { credentials: 'include' })
+
+    if (!response.ok) {
+      const msg = await handleError(response, 'Error al buscar socios')
+      throw new Error(msg)
+    }
+
+    return await response.json()
+  },
+
   async getById(id) {
     const response = await fetch(`${API_URL}/byId/${id}`, { credentials: 'include' })
     if (!response.ok) {

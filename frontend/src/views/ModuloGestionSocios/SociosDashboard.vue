@@ -37,10 +37,16 @@ const selectedSocio = ref(null) // For reference
 const selectedSocioId = ref(null)
 
 // Search State
-const searchDni = ref('')
+const searchQuery = ref('')
+const searchDni = searchQuery // compat alias for template if needed
 const searchResult = ref(null)
+const searchResults = ref([])
 const searchError = ref('')
 const isSearching = ref(false)
+const searchPage = ref(1)
+const searchPageSize = ref(10)
+const searchTotalCount = ref(0)
+const searchTotalPages = ref(0)
 
 // Debtors State
 const debtorsList = ref([])
@@ -64,7 +70,7 @@ const actions = [
   },
   {
     id: 'search',
-    title: 'Buscar socio por DNI',
+    title: 'Buscar socio',
     description: 'Consultar estado e información de un socio.',
     icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z',
     color: 'text-indigo-600',
@@ -86,8 +92,12 @@ const selectAction = (actionId) => {
   currentAction.value = actionId
   // Reset states
   searchResult.value = null
-  searchDni.value = ''
+  searchResults.value = []
+  searchQuery.value = ''
   searchError.value = ''
+  searchTotalCount.value = 0
+  searchTotalPages.value = 0
+  searchPage.value = 1
   debtorsList.value = []
   debtorsError.value = ''
 
@@ -120,16 +130,14 @@ const closeModal = () => {
 const handleSaveSocio = (savedSocio) => {
   closeModal()
   // Refresh data if needed
-  if (
-    currentAction.value === 'search' &&
-    searchResult.value &&
-    (searchResult.value.id === savedSocio.id || searchResult.value.id === selectedSocioId.value)
-  ) {
-    // If it's an update, we might want to refresh by DNI or just use the saved data
-    if (savedSocio.dni) {
-      searchDni.value = savedSocio.dni
-      handleSearch()
+  const activeId = savedSocio?.id ?? selectedSocioId.value
+  const hasActiveSearch = currentAction.value === 'search' && (searchResult.value || searchResults.value.length > 0)
+  const matchesSearch = hasActiveSearch && (searchResults.value.some(s => s.id === activeId) || searchResult.value?.id === activeId)
+  if (matchesSearch) {
+    if (savedSocio?.dni) {
+      searchQuery.value = savedSocio.dni
     }
+    handleSearch(1)
   } else if (currentAction.value === 'debtors') {
     fetchDebtors()
   }
@@ -138,23 +146,59 @@ const handleSaveSocio = (savedSocio) => {
 }
 
 // Search Logic
-const handleSearch = async () => {
-  const dniClean = searchDni.value.replace(/\s/g, '').trim()
-  if (!dniClean) return
+const handleSearch = async (page = 1) => {
+  const queryClean = searchQuery.value.replace(/\s+/g, ' ').trim()
+  if (!queryClean) return
 
   isSearching.value = true
   searchError.value = ''
   searchResult.value = null
+  searchResults.value = []
+  searchPage.value = page
 
   try {
-    const data = await SociosService.getByDni(dniClean)
+    const data = await SociosService.search(queryClean, page, searchPageSize.value)
 
-    searchResult.value = data
+    // Normalize PagedResult shape: { items, totalCount, totalPages } or plain array
+    let items = []
+    let totalCount = 0
+    let totalPages = 0
+    if (Array.isArray(data)) {
+      items = data
+      totalCount = data.length
+      totalPages = 1
+    } else if (data && Array.isArray(data.items)) {
+      items = data.items
+      totalCount = data.totalCount ?? items.length
+      totalPages = data.totalPages ?? Math.ceil(totalCount / searchPageSize.value)
+    } else if (data && data.id) {
+      items = [data]
+      totalCount = 1
+      totalPages = 1
+    } else {
+      items = []
+    }
+
+    searchResults.value = items
+    searchTotalCount.value = totalCount
+    searchTotalPages.value = totalPages
+    if (items.length === 0) {
+      searchError.value = 'No se encontraron socios'
+    } else if (items.length === 1) {
+      searchResult.value = items[0]
+    }
   } catch (error) {
     searchError.value = error.message
+    searchResults.value = []
+    searchTotalCount.value = 0
+    searchTotalPages.value = 0
   } finally {
     isSearching.value = false
   }
+}
+
+const handleSearchPageChange = (newPage) => {
+  handleSearch(newPage)
 }
 
 // Debtors Logic
@@ -197,7 +241,10 @@ const confirmDelete = async () => {
     // Refresh
     if (currentAction.value === 'search') {
       searchResult.value = null
-      searchDni.value = ''
+      searchResults.value = []
+      searchQuery.value = ''
+      searchTotalCount.value = 0
+      searchTotalPages.value = 0
     } else if (currentAction.value === 'debtors') {
       fetchDebtors()
     }
@@ -346,10 +393,9 @@ const handleView = (socio) => {
 
             <!-- SEARCH ACTION -->
             <div v-else-if="currentAction === 'search'"
-              class="max-w-2xl mx-auto py-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              class="max-w-4xl mx-auto py-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div class="mb-8">
-                <label for="search-dni" class="block text-sm font-bold text-slate-700 mb-2">Ingrese DNI del
-                  socio</label>
+                <label for="search-query" class="block text-sm font-bold text-slate-700 mb-2">Ingrese DNI, nombre o apellido</label>
                 <div class="flex gap-3">
                   <div class="relative flex-grow">
                     <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
@@ -360,19 +406,19 @@ const handleView = (socio) => {
                           clip-rule="evenodd" />
                       </svg>
                     </div>
-                    <input type="text" id="search-dni" v-model="searchDni" @keyup.enter="handleSearch"
+                    <input type="text" id="search-query" v-model="searchQuery" @keyup.enter="handleSearch(1)"
                       class="block w-full pl-11 pr-4 py-3 border border-slate-300 rounded-xl leading-5 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm shadow-sm transition-all"
-                      placeholder="Ej: 12345678" />
+                      placeholder="Ej: 12345678, Juan Pérez" />
                   </div>
-                  <button @click="handleSearch" :disabled="isSearching"
+                  <button @click="handleSearch(1)" :disabled="isSearching"
                     class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-bold rounded-xl shadow-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 transition-all">
                     {{ isSearching ? 'Buscando...' : 'Buscar' }}
                   </button>
                 </div>
               </div>
 
-              <!-- Search Results -->
-              <div v-if="searchError"
+              <!-- Search Error / Empty -->
+              <div v-if="searchError && searchResults.length === 0"
                 class="rounded-xl bg-red-50 p-4 mb-6 border border-red-100 animate-in fade-in slide-in-from-top-2">
                 <div class="flex">
                   <div class="flex-shrink-0">
@@ -389,8 +435,18 @@ const handleView = (socio) => {
                 </div>
               </div>
 
-              <div v-if="searchResult">
-                <SocioCard :socio="searchResult" @edit="handleEdit" @delete="handleDelete" @view="handleView" />
+              <!-- Single result classic card -->
+              <div v-if="searchResults.length === 1">
+                <SocioCard :socio="searchResults[0]" @edit="handleEdit" @delete="handleDelete" @view="handleView" />
+              </div>
+
+              <!-- Multiple results -->
+              <div v-else-if="searchResults.length > 1">
+                <p class="text-sm text-slate-500 mb-3">Se encontraron {{ searchTotalCount }} socios</p>
+                <SocioList :socios="searchResults" @edit="handleEdit" @delete="handleDelete" @view="handleView" />
+                <div v-if="searchTotalPages > 1" class="mt-6">
+                  <Pagination :current-page="searchPage" :total-pages="searchTotalPages" :total-count="searchTotalCount" :page-size="searchPageSize" @change-page="handleSearchPageChange" />
+                </div>
               </div>
             </div>
 

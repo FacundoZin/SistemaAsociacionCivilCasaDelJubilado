@@ -65,6 +65,23 @@ namespace APIClub.Contrrollers
             return Ok(result.Data);
         }
 
+        [HttpGet("search")]
+        public async Task<IActionResult> SearchSocios([FromQuery] string q, [FromQuery] int page = 1, [FromQuery] int pageSize = 10)
+        {
+            q = string.IsNullOrWhiteSpace(q) ? string.Empty : System.Text.RegularExpressions.Regex.Replace(q, @"\s+", " ").Trim();
+            if (string.IsNullOrWhiteSpace(q))
+                return BadRequest(new { mensaje = "Debe indicar un término de búsqueda." });
+            if (page < 1) page = 1;
+            if (pageSize < 1 || pageSize > 50) pageSize = 10;
+
+            var result = await _SocioService.SearchSociosAsync(q, page, pageSize);
+            if (result.Exit != true)
+            {
+                return StatusCode(result.Errorcode, new { mensaje = result.Errormessage });
+            }
+            return Ok(result.Data);
+        }
+
         [HttpGet("{dni}")]
         public async Task<IActionResult> GetSocioByDni(string dni)
         {

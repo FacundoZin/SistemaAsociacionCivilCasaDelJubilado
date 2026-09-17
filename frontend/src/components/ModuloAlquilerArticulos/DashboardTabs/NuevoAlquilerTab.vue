@@ -18,6 +18,8 @@ const newAlquilerItems = ref([]) // { articuloId, cantidad, nombre, precio }
 const observaciones = ref('')
 const isRegisteringAlquiler = ref(false)
 const searchError = ref('')
+const searchResults = ref([])
+const showResults = ref(false)
 
 // State - Articulos available for selection
 const articulos = ref([])
@@ -38,14 +40,44 @@ const loadArticulos = async () => {
 
 // Methods - Search Socio
 const handleSearchSocio = async () => {
-  const dniClean = searchSocioDni.value.replace(/\s/g, '').trim()
-  if (!dniClean) return
+  const queryClean = searchSocioDni.value.replace(/\s+/g, ' ').trim()
+  if (!queryClean) return
   searchingSocio.value = true
   foundSocio.value = null
   rentCheckStatus.value = null
   searchError.value = ''
+  searchResults.value = []
+  showResults.value = false
   try {
-    rentCheckStatus.value = await AlquilerService.getAlquilerStatusBySocio(dniClean)
+    const searchData = await SociosService.search(queryClean, 1, 20)
+    let items = []
+    if (Array.isArray(searchData)) items = searchData
+    else if (searchData && Array.isArray(searchData.items)) items = searchData.items
+    else if (searchData && searchData.id) items = [searchData]
+
+    if (items.length === 0) {
+      searchError.value = 'No se encontraron socios'
+    } else if (items.length === 1) {
+      const socio = items[0]
+      rentCheckStatus.value = await AlquilerService.getAlquilerStatusBySocio(socio.dni)
+    } else {
+      searchResults.value = items
+      showResults.value = true
+    }
+  } catch (e) {
+    searchError.value = e.message
+  } finally {
+    searchingSocio.value = false
+  }
+}
+
+const selectSocioForAlquiler = async (socio) => {
+  searchingSocio.value = true
+  searchError.value = ''
+  try {
+    rentCheckStatus.value = await AlquilerService.getAlquilerStatusBySocio(socio.dni)
+    searchResults.value = []
+    showResults.value = false
   } catch (e) {
     searchError.value = e.message
   } finally {
@@ -54,13 +86,25 @@ const handleSearchSocio = async () => {
 }
 
 const startNewAlquiler = async () => {
-  const dniClean = searchSocioDni.value.replace(/\s/g, '').trim()
-  if (!dniClean) return
+  const status = rentCheckStatus.value
+  const idSocio = status?.idSocio ?? status?.IdSocio ?? null
   searchingSocio.value = true
   try {
-    const socio = await SociosService.getByDni(dniClean)
+    let socio = null
+    if (idSocio) {
+      socio = await SociosService.getById(idSocio)
+    } else {
+      // fallback: use DNI from status or input
+      let dni = status?.dni ?? status?.socioDni ?? status?.dniSocio ?? searchSocioDni.value.replace(/\s+/g, ' ').trim()
+      if (!dni && searchResults.value.length > 0) dni = searchResults.value[0].dni
+      const dniClean = String(dni || '').replace(/\s/g, '').trim()
+      if (!dniClean) throw new Error('No se pudo determinar el socio')
+      socio = await SociosService.getByDni(dniClean)
+    }
     foundSocio.value = socio
     rentCheckStatus.value = null
+    searchResults.value = []
+    showResults.value = false
   } catch (e) {
     searchError.value = 'Error al cargar datos del socio: ' + e.message
   } finally {
@@ -75,6 +119,8 @@ const navigateToAlquiler = (idAlquiler) => {
 const cancelSearch = () => {
   rentCheckStatus.value = null
   searchSocioDni.value = ''
+  searchResults.value = []
+  showResults.value = false
 }
 
 const resetNuevoAlquiler = () => {
@@ -84,6 +130,8 @@ const resetNuevoAlquiler = () => {
   newAlquilerItems.value = []
   observaciones.value = ''
   searchError.value = ''
+  searchResults.value = []
+  showResults.value = false
   loadArticulos() // Refresh articles availability/prices if needed
 }
 
@@ -168,7 +216,7 @@ onMounted(() => {
         </div>
         <h3 class="text-2xl font-bold text-slate-900 mb-3 tracking-tight">Buscar Socio</h3>
         <p class="text-slate-500 mb-10 text-lg">
-          Ingrese el DNI del socio para iniciar el registro de un nuevo alquiler.
+          Ingrese el DNI, nombre o apellido del socio para iniciar el registro de un nuevo alquiler.
         </p>
 
         <div class="flex flex-col sm:flex-row gap-3 max-w-lg mx-auto">
@@ -194,7 +242,7 @@ onMounted(() => {
               v-model="searchSocioDni"
               @keyup.enter="handleSearchSocio"
               class="block w-full rounded-xl border-slate-300 pl-11 pr-10 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 sm:text-sm py-4 border transition-all shadow-sm"
-              placeholder="DNI del socio..."
+              placeholder="DNI, nombre o apellido..."
             />
             <div
               v-if="searchingSocio"
@@ -248,6 +296,22 @@ onMounted(() => {
             />
           </svg>
           {{ searchError }}
+        </div>
+
+        <div v-if="showResults && searchResults.length > 0" class="mt-6 text-left">
+          <p class="text-sm text-slate-500 mb-3 font-medium">Se encontraron {{ searchResults.length }} socios — seleccione uno:</p>
+          <div class="space-y-2 max-h-72 overflow-y-auto pr-1">
+            <button v-for="s in searchResults" :key="s.id" @click="selectSocioForAlquiler(s)"
+              class="w-full text-left p-4 bg-white border border-slate-200 rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-all flex justify-between items-center group">
+              <div>
+                <p class="text-sm font-bold text-slate-900 group-hover:text-blue-700">{{ s.apellido }}, {{ s.nombre }}</p>
+                <p class="text-xs text-slate-500">DNI: {{ s.dni }}<span v-if="s.localidad"> — {{ s.localidad }}</span></p>
+              </div>
+              <svg class="w-5 h-5 text-slate-300 group-hover:text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </div>

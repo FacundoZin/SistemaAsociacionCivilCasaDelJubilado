@@ -380,6 +380,38 @@ namespace APIClub.Application.Services
 
             return Result<PagedResult<socioCardSinEstadoDto>>.Exito(result);
         }
+
+        public async Task<Result<PagedResult<PreviewSocioDto>>> SearchSociosAsync(string query, int page, int pageSize)
+        {
+            query = string.IsNullOrWhiteSpace(query) ? string.Empty : System.Text.RegularExpressions.Regex.Replace(query, @"\s+", " ").Trim();
+            if (string.IsNullOrWhiteSpace(query))
+                return Result<PagedResult<PreviewSocioDto>>.Error("Debe indicar un término de búsqueda.", 400);
+
+            if (page < 1) page = 1;
+            if (pageSize < 1 || pageSize > 50) pageSize = 10;
+
+            var (socios, totalCount) = await _SocioRepository.SearchSociosAsync(query, page, pageSize);
+
+            var items = socios.Select(s => new PreviewSocioDto
+            {
+                Id = s.Id,
+                Nombre = s.Nombre,
+                Apellido = s.Apellido,
+                Dni = s.Dni,
+                Telefono = s.Telefono?.FormatearForUserVisibility(),
+                Direcccion = s.Direcccion,
+                nombreLote = s.Lote?.NombreLote,
+                IdLote = s.LoteId,
+                Localidad = s.Localidad,
+                PreferenciaDePago = s.PreferenciaDePago,
+                FechaAsociacion = s.FechaAsociacion,
+                AdeudaCuotas = false
+            }).ToList();
+
+            var result = new PagedResult<PreviewSocioDto>(items, totalCount, page, pageSize);
+
+            return Result<PagedResult<PreviewSocioDto>>.Exito(result);
+        }
     }
 }
 

@@ -237,5 +237,35 @@ namespace APIClub.Infrastructure.Persistence.Repositorio
 
             return items;
         }
+
+        public async Task<(List<Socio> Items, int TotalCount)> SearchSociosAsync(string query, int page, int pageSize)
+        {
+            query = query == null ? string.Empty : System.Text.RegularExpressions.Regex.Replace(query, @"\s+", " ").Trim();
+            if (string.IsNullOrWhiteSpace(query))
+                return (new List<Socio>(), 0);
+
+            var lowerQuery = query.ToLower();
+
+            var baseQuery = _Dbcontext.Socios
+                .Include(s => s.Lote)
+                .Include(s => s.HistorialCuotas)
+                .AsNoTracking()
+                .Where(s => s.Dni.ToLower().Contains(lowerQuery)
+                    || s.Nombre.ToLower().Contains(lowerQuery)
+                    || s.Apellido.ToLower().Contains(lowerQuery)
+                    || (s.Nombre + " " + s.Apellido).ToLower().Contains(lowerQuery)
+                    || (s.Apellido + " " + s.Nombre).ToLower().Contains(lowerQuery));
+
+            int totalCount = await baseQuery.CountAsync();
+
+            var items = await baseQuery
+                .OrderBy(s => s.Apellido)
+                .ThenBy(s => s.Nombre)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+
+            return (items, totalCount);
+        }
     }
 }

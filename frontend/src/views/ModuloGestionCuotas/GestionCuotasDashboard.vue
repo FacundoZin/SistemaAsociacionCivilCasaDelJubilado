@@ -24,11 +24,14 @@ const showToast = (message, type = 'success') => {
 
 // State
 const currentAction = ref('none') // 'none', 'pay', 'update'
-const searchDni = ref('')
+const searchQuery = ref('')
+const searchDni = searchQuery // keep alias for compat
 const searchResult = ref(null)
+const searchResults = ref([])
 const searchError = ref('')
 const isSearching = ref(false)
 const isProcessing = ref(false)
+const searchTotalCount = ref(0)
 
 const formaPagoSelected = ref('2') // Default Sede (2)
 const nuevoValorCuota = ref(0)
@@ -84,8 +87,10 @@ const selectAction = (actionId) => {
 
   currentAction.value = actionId
   searchResult.value = null
-  searchDni.value = ''
+  searchResults.value = []
+  searchQuery.value = ''
   searchError.value = ''
+  searchTotalCount.value = 0
   nuevoValorCuota.value = 0
   selectedPeriods.value = []
 }
@@ -94,24 +99,72 @@ const goHome = () => {
   router.push('/')
 }
 
+const selectSocioFromResults = async (socio) => {
+  // Fetch full debt preview for selected socio to keep existing SocioFeeCard expectations
+  isSearching.value = true
+  searchError.value = ''
+  try {
+    const full = await SociosService.getByDni(socio.dni)
+    searchResult.value = full
+    searchResults.value = []
+    searchTotalCount.value = 0
+  } catch (e) {
+    // fallback to preview data if getByDni fails
+    searchResult.value = socio
+    searchResults.value = []
+  } finally {
+    isSearching.value = false
+  }
+}
+
 const handleSearch = async () => {
-  const dniClean = searchDni.value.replace(/\s/g, '').trim()
-  if (!dniClean) return
+  const queryClean = searchQuery.value.replace(/\s+/g, ' ').trim()
+  if (!queryClean) return
 
   isSearching.value = true
   searchError.value = ''
   searchResult.value = null
+  searchResults.value = []
+  searchTotalCount.value = 0
   selectedPeriods.value = []
 
   try {
-    const data = await SociosService.getByDni(dniClean)
+    const data = await SociosService.search(queryClean, 1, 20)
 
-    searchResult.value = data
+    let items = []
+    if (Array.isArray(data)) items = data
+    else if (data && Array.isArray(data.items)) items = data.items
+    else if (data && data.id) items = [data]
+
+    searchTotalCount.value = data?.totalCount ?? items.length
+
+    if (items.length === 0) {
+      searchError.value = 'No se encontraron socios'
+    } else if (items.length === 1) {
+      // Single result -> auto fetch full debt preview
+      const socio = items[0]
+      try {
+        const full = await SociosService.getByDni(socio.dni)
+        searchResult.value = full
+      } catch {
+        searchResult.value = socio
+      }
+    } else {
+      searchResults.value = items
+    }
   } catch (error) {
     searchError.value = error.message
   } finally {
     isSearching.value = false
   }
+}
+
+const clearSelection = () => {
+  searchResult.value = null
+  searchResults.value = []
+  searchQuery.value = ''
+  searchError.value = ''
+  selectedPeriods.value = []
 }
 
 const handleRegisterPayment = async () => {
@@ -138,7 +191,8 @@ const handleRegisterPayment = async () => {
 
     showToast('Los pagos se registraron correctamente')
     searchResult.value = null
-    searchDni.value = ''
+    searchResults.value = []
+    searchQuery.value = ''
     selectedPeriods.value = []
   } catch (error) {
     showToast(error.message || 'Algo salió mal al registrar el pago', 'error')
@@ -310,8 +364,7 @@ const handleView = (socio) => {
               </h3>
 
               <div class="mb-8">
-                <label for="search-dni" class="block text-sm font-medium text-slate-700 mb-2 font-bold">Ingrese DNI del
-                  socio</label>
+                <label for="search-query" class="block text-sm font-medium text-slate-700 mb-2 font-bold">Ingrese DNI, nombre o apellido</label>
                 <div class="flex flex-col sm:flex-row gap-3">
                   <div class="relative flex-grow">
                     <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -322,9 +375,9 @@ const handleView = (socio) => {
                           clip-rule="evenodd" />
                       </svg>
                     </div>
-                    <input type="text" id="search-dni" v-model="searchDni" @keyup.enter="handleSearch"
+                    <input type="text" id="search-query" v-model="searchQuery" @keyup.enter="handleSearch"
                       class="block w-full pl-10 pr-3 py-3 border border-slate-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm transition-all"
-                      placeholder="Ej: 12345678" />
+                      placeholder="Ej: 12345678, Juan Pérez" />
                   </div>
                   <button @click="handleSearch" :disabled="isSearching"
                     class="inline-flex items-center justify-center px-6 py-3 border border-transparent text-sm font-bold rounded-xl shadow-lg text-white bg-emerald-600 hover:bg-emerald-700 focus:outline-none disabled:opacity-50 transition-all">
@@ -358,8 +411,32 @@ const handleView = (socio) => {
                 </div>
               </div>
 
+              <!-- Multiple results selector -->
+              <div v-if="searchResults.length > 1" class="mb-6 animate-in fade-in slide-in-from-top-2 duration-300">
+                <p class="text-sm text-slate-500 mb-3 font-medium">Se encontraron {{ searchTotalCount }} socios — seleccione uno:</p>
+                <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
+                  <button v-for="s in searchResults" :key="s.id" @click="selectSocioFromResults(s)"
+                    class="w-full text-left p-4 bg-white border border-slate-200 rounded-xl hover:bg-emerald-50 hover:border-emerald-200 transition-all flex justify-between items-center group">
+                    <div>
+                      <p class="text-sm font-bold text-slate-900 group-hover:text-emerald-700">{{ s.apellido }}, {{ s.nombre }}</p>
+                      <p class="text-xs text-slate-500">DNI: {{ s.dni }}<span v-if="s.localidad"> — {{ s.localidad }}</span></p>
+                    </div>
+                    <svg class="w-5 h-5 text-slate-300 group-hover:text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </div>
+                <button @click="clearSelection" class="mt-3 text-xs font-bold text-slate-500 hover:text-slate-700">Limpiar búsqueda</button>
+              </div>
+
               <!-- Search Results & Register Form -->
               <div v-if="searchResult" class="animate-in fade-in slide-in-from-top-4 duration-500">
+                <div v-if="searchResults.length === 0" class="mb-4 flex justify-end">
+                  <button @click="clearSelection" class="text-xs font-bold text-slate-500 hover:text-red-500 flex items-center gap-1">
+                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                    Cambiar socio
+                  </button>
+                </div>
                 <SocioFeeCard :socio="searchResult" @view="handleView" @update-selection="handlePeriodsUpdate" />
 
                 <!-- Guía visual para continuar al pago -->
