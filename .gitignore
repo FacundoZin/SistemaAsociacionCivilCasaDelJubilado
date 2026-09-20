@@ -94,3 +94,6 @@ __screenshots__/
 
 # Ngrok
 ngrok.yml
+
+# ATL local cache/skills
+.atl/
