@@ -392,20 +392,50 @@ namespace APIClub.Application.Services
 
             var (socios, totalCount) = await _SocioRepository.SearchSociosAsync(query, page, pageSize);
 
-            var items = socios.Select(s => new PreviewSocioDto
+            var hoy = DateTime.Now;
+            int anioActual = hoy.Year;
+            int semestreActual = hoy.Month <= 6 ? 1 : 2;
+
+            var items = socios.Select(s =>
             {
-                Id = s.Id,
-                Nombre = s.Nombre,
-                Apellido = s.Apellido,
-                Dni = s.Dni,
-                Telefono = s.Telefono?.FormatearForUserVisibility(),
-                Direcccion = s.Direcccion,
-                nombreLote = s.Lote?.NombreLote,
-                IdLote = s.LoteId,
-                Localidad = s.Localidad,
-                PreferenciaDePago = s.PreferenciaDePago,
-                FechaAsociacion = s.FechaAsociacion,
-                AdeudaCuotas = false
+                bool adeudaCuotas = false;
+
+                if (s.FechaAsociacion != default)
+                {
+                    int anioInicio = s.FechaAsociacion.Year;
+                    int semestreInicio = s.FechaAsociacion.Month <= 6 ? 1 : 2;
+
+                    for (int anio = anioInicio; anio <= anioActual && !adeudaCuotas; anio++)
+                    {
+                        int semestreDesde = (anio == anioInicio) ? semestreInicio : 1;
+                        int semestreHasta = (anio == anioActual) ? semestreActual : 2;
+
+                        for (int sem = semestreDesde; sem <= semestreHasta; sem++)
+                        {
+                            if (!(s.HistorialCuotas?.Any(c => c.Anio == anio && c.Semestre == sem) ?? false))
+                            {
+                                adeudaCuotas = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                return new PreviewSocioDto
+                {
+                    Id = s.Id,
+                    Nombre = s.Nombre,
+                    Apellido = s.Apellido,
+                    Dni = s.Dni,
+                    Telefono = s.Telefono?.FormatearForUserVisibility(),
+                    Direcccion = s.Direcccion,
+                    nombreLote = s.Lote?.NombreLote,
+                    IdLote = s.LoteId,
+                    Localidad = s.Localidad,
+                    PreferenciaDePago = s.PreferenciaDePago,
+                    FechaAsociacion = s.FechaAsociacion,
+                    AdeudaCuotas = adeudaCuotas
+                };
             }).ToList();
 
             var result = new PagedResult<PreviewSocioDto>(items, totalCount, page, pageSize);
